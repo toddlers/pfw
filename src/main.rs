@@ -2,9 +2,19 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::{io, thread};
 extern crate simplelog;
+use clap::Parser;
 use simplelog::*;
-use std::env;
 use std::sync::Arc;
+
+#[derive(Parser, Debug)]
+struct Args {
+    // source port to listen on
+    #[clap(long, short = 's')]
+    src_port: String,
+    // destination port to listen on
+    #[clap(long, short = 'd')]
+    dst_port: String,
+}
 
 fn forward(from: Arc<TcpStream>, to: Arc<TcpStream>) -> io::Result<()> {
     let mut reader = BufReader::new(from.as_ref());
@@ -39,9 +49,9 @@ fn handle_client(client_stream: TcpStream, target_addr: &str) -> io::Result<()> 
             // bi-directional flow
             // concurrency
             // non blocking
-            // scored threads for clean exit, no leftover
+            // scoped threads for clean exit, no leftover
             // thread::spawn -> non blocking threads, but may leave lingering threads
-            // thread::scope -> safer, but blocks  the funciton forver, but cleaned up automatically
+            // thread::scope -> safer, but blocks the funciton forver, but cleaned up automatically
             thread::spawn(move || forward(client, server));
             thread::spawn(move || forward(server_clone, client_clone));
         }
@@ -51,13 +61,11 @@ fn handle_client(client_stream: TcpStream, target_addr: &str) -> io::Result<()> 
 }
 
 fn main() -> io::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: {} <from> <to> ", args[0]);
-        std::process::exit(1);
-    }
-    let src_port = &args[1];
-    let dst_port = &args[2];
+    let args = Args::parse();
+    // if args.len() < 3 {
+    //     eprintln!("Usage: {} <from> <to> ", args[0]);
+    //     std::process::exit(1);
+    // }
 
     CombinedLogger::init(vec![TermLogger::new(
         LevelFilter::Info,
@@ -66,20 +74,24 @@ fn main() -> io::Result<()> {
         ColorChoice::Auto,
     )])
     .unwrap();
-    let src_connection_string = format!("127.0.0.1:{}", src_port);
-    let dst_connection_string = format!("127.0.0.1:{}", dst_port);
+    let src_connection_string = format!("127.0.0.1:{}", args.src_port);
+    let dst_connection_string = format!("127.0.0.1:{}", args.dst_port);
 
     let listener = TcpListener::bind(&src_connection_string)?;
     log::info!(
         "Port forwarder running on 127.0.0.1:{} -> {}",
-        src_port,
+        args.src_port,
         dst_connection_string
     );
     for stream in listener.incoming() {
         match stream {
             Ok(client_stream) => {
                 let target_addr = dst_connection_string.to_string();
-                thread::spawn(move || handle_client(client_stream, &target_addr));
+                thread::spawn(move || {
+                    if let Err(e) = handle_client(client_stream, &target_addr) {
+                        log::error!("Failed to handle client :{}", e);
+                    };
+                });
             }
             Err(e) => log::error!("Connection failed: {}", e),
         }
